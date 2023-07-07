@@ -15,7 +15,7 @@ params:
 
 ```{r setup, include=FALSE}
 library(flexdashboard)
-query_pubmed <- TRUE
+query_pubmed <- FALSE
 ```
 
 ```{r packages}
@@ -731,3 +731,24 @@ df.country.year2 %>%
 ```
 
 > \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+# Missing Data
+
+## Column 1 {data-width=700}
+
+### This table allows investigating why the country/university could not be identified
+
+```{r missing_universities, warning=FALSE}
+articles.df4 %>% 
+  filter(is.na(university)) %>% 
+  select(-c(country_code:region)) %>% 
+  mutate(doi = paste0("<a href='", doi,"' target='_blank'>", doi, "</a>")) %>%
+  datatable(
+    extensions = 'Responsive',
+    options = list(iDisplayLength = 5),
+    caption = "Journal paper metadata",
+    escape = FALSE
+    )
+```
+
+## Column 2

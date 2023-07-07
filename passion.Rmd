@@ -1,0 +1,739 @@
+---
+title: "Passion Dashboard"
+author: "Rémi Thériault"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    social: menu
+    source_code: embed
+    # theme: lumen
+    storyboard: false
+params:
+  API_TOKEN_PUBMED: API_TOKEN_PUBMED
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+query_pubmed <- FALSE
+```
+
+```{r packages}
+# Load packages
+library(extrafont)
+library(easyPubMed)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(stringi)
+library(DT)
+library(fuzzyjoin)
+library(countrycode)
+library(Ecfun)
+library(tidyr)
+library(waffle)
+library(plotly)
+library(ggplot2)
+library(ggflags)
+library(knitr)
+library(lubridate)
+library(xts)
+library(tibble)
+library(dygraphs)
+library(rempsyc)
+library(RColorBrewer)
+library(tools)
+
+```
+
+```{r API_TOKEN_PUBMED, eval=query_pubmed}
+# API_TOKEN_PUBMED <- keyring::key_get("pubmed", "rempsyc")
+# API_TOKEN_PUBMED <- Sys.getenv("API_TOKEN_PUBMED")
+API_TOKEN_PUBMED <- params$API_TOKEN_PUBMED
+
+if (API_TOKEN_PUBMED == "") stop("API_TOKEN_PUBMED is an empty string. Terminating workflow.")
+
+if (nchar(API_TOKEN_PUBMED) != 36) stop("API_TOKEN_PUBMED is not 36 characters-long. Terminating workflow.")
+
+```
+
+```{r batch_pubmed_download, results='hide', eval=query_pubmed}
+year_low <- 1980
+year_high <- 3000
+
+# Download data
+d.fls <- batch_pubmed_download(
+  pubmed_query_string = paste(
+    "passion [Title/Abstract]",
+    "OR Dualistic Model of Passion [Text Word]",
+    paste0("AND ('", year_low, "/01/01'[Date - Publication] : '", year_high, "/12/31'[Date - Publication])") 
+  ),
+  dest_file_prefix = "data/easyPubMed_data_",
+  api_key = API_TOKEN_PUBMED,
+  batch_size = 5000)
+
+```
+
+```{r all_articles_to_df, eval=query_pubmed}
+# Convert XLM data to a data frame of first authors
+# articles.df <- table_articles_byAuth(d.fls, included_authors = "first")
+all_articles_to_df <- function(d.fls){
+  y <- lapply(seq_along(d.fls), function(x) {
+    list.articles <- articles_to_list(d.fls[x])
+    list.articles.df <- lapply(list.articles, article_to_df)
+    articles.df <- do.call(rbind, list.articles.df)
+  })
+  do.call(rbind, y)
+}
+
+articles.df <- all_articles_to_df(d.fls)
+
+articles.df <- articles.df %>% 
+  filter(!duplicated(pmid))
+
+```
+
+```{r address_split, message=FALSE, warning=FALSE, eval=query_pubmed}
+# Split address in university and department
+addr.split <- str_split(articles.df$address, ",")
+
+split_address <- function(addr.split, string) {
+  ind1 <- map(addr.split, ~which(grepl(string, .x)))
+  ind1 <- imap(addr.split, \(x, idx) pluck(ind1[[idx]])[1])
+  ind1 <- imap(addr.split, \(x, idx) pluck(x, ind1[[idx]]))
+  ind1 <- trimws(as.character(ind1))
+  ind1 <- replace(ind1, ind1 == "NULL", NA)
+}
+
+string.dep <- "Department|Faculty|Center|School|Unit|Institute|Centre|Division|Unidad"
+dep <- split_address(addr.split, string.dep)
+
+string.uni <- "University"
+uni <- split_address(addr.split, string.uni)
+
+string.uni2 <- "University|College|School|Institute|Center|Centre|CEMIC, CONICET|CNRS|INSEAD"
+uni2 <- split_address(addr.split, string.uni2)
+uni3 <- ifelse(!is.na(uni), uni, uni2)
+
+articles.df <- articles.df %>%
+  mutate(department = dep,
+         university = uni3)
+
+articles.df <- articles.df %>%
+  select(journal, year, university, department, address, lastname, firstname,
+         month, day, jabbrv, title, doi, pmid, abstract)
+```
+
+```{r correct_universities, eval=query_pubmed}
+# Correct a few university names manually
+articles.df <- articles.df %>%
+  mutate(university = case_when(
+    university == "Stony Brook University" ~ "University of Colorado at Colorado Springs",
+    university == "Technion-Israel Institute of Technology" ~ "Technion - Israel Institute of Technology",
+    university == "University of Montreal" ~ "Université de Montréal",
+    university == "Philipps-University of Marburg" ~ "Phillips-Universität Marburg",
+    university == "University of Wisconsin-Madison" ~ "University of Wisconsin - Madison",
+    TRUE ~ university
+  ))
+
+```
+
+```{r countries_data, eval=query_pubmed}
+# Download university + country data
+countries <- read.csv(
+  "https://raw.githubusercontent.com/endSly/world-universities-csv/master/world-universities.csv",
+  header = FALSE)
+names(countries) <- c("country_code", "university", "website")
+countries <- countries[1:2]
+
+# Correct/add a few university countries manually
+countries <- countries %>% 
+  mutate(
+    country_code = replace(country_code, 
+                           university == "University of the Netherlands Antilles, Curacao", "CW"),
+    country_code = replace(country_code, 
+                           university == "University of Sint Eustatius School of Medicine", "SX"),
+    country_code = replace(country_code, 
+                           university == "St.James's School of Medicine, Bonaire" |
+                             university == "American University of the Caribbean, Sint Maarten" |
+                             university == "International University School of Medicine (IUSOM)", "BQ")) %>% 
+  add_row(country_code = "US", university = "University of Colorado") %>%
+  add_row(country_code = "US", university = "Stony Brook University") %>%
+  add_row(country_code = "GB", university = "York St John University") %>%
+  add_row(country_code = "DE", university = "Max Planck Institute for Human Development") %>%
+  add_row(country_code = "AR", university = "CEMIC, CONICET") %>%
+  add_row(country_code = "VN", university = "SWPS University of Social Sciences and Humanities") %>%
+  add_row(country_code = "SG", university = "Yale-NUS College") %>%
+  add_row(country_code = "US", university = "Rutgers Business School-Newark and New Brunswick") %>%
+  add_row(country_code = "BR", university = "Institute D'Or for Research and Teaching") %>%
+  add_row(country_code = "GB", university = "Moray House School of Education and Sport") %>%
+  add_row(country_code = "AU", university = "Institute for Positive Psychology and Education") %>%
+  add_row(country_code = "FR", university = "CNRS") %>%
+  add_row(country_code = "US", university = "Columbia Business School") %>%
+  add_row(country_code = "US", university = "Office of Population Research") %>%
+  add_row(country_code = "US", university = "School of Family Life") %>%
+  add_row(country_code = "CH", university = "Jacobs Center for Productive Youth Development") %>%
+  add_row(country_code = "KR", university = "SKK Graduate School of Business") %>%
+  add_row(country_code = "SG", university = "Lee Kong Chian School of Business") %>%
+  add_row(country_code = "US", university = "Tepper School of Business") %>%
+  add_row(country_code = "US", university = "Stephen M. Ross School of Business") %>%
+  add_row(country_code = "US", university = "Fuqua School of Business") %>%
+  add_row(country_code = "US", university = "Jones Graduate School of Business") %>%
+  add_row(country_code = "US", university = "Questrom School of Business") %>%
+  add_row(country_code = "US", university = "Booth School of Business") %>%
+  add_row(country_code = "FR", university = "INSEAD") %>% 
+  add_row(country_code = "BE", university = "University of Liege") %>%
+  add_row(country_code = "KR", university = "Sungkyunkwan University") %>%
+  add_row(country_code = "DE", university = "University of Tubingen") %>%
+  add_row(country_code = "AU", university = "Melbourne School of Psychological Sciences") %>%
+  add_row(country_code = "AT", university = "University of Vienna") %>%
+  add_row(country_code = "NL", university = "Vrije Universiteit Amsterdam") %>%
+  add_row(country_code = "CA", university = "Montreal Behavioural Medicine Centre (MBMC)") %>%
+  add_row(country_code = "GB", university = "Manchester Centre for Health Psychology") %>%
+  add_row(country_code = "US", university = "Annenberg School for Communication and Journalism") %>%
+  add_row(country_code = "US", university = 
+            "National Center for Posttraumatic Stress Disorder at VA Boston Healthcare System") %>%
+  add_row(country_code = "US", university = "Cincinnati Children's Hospital Medical Center") %>%
+  add_row(country_code = "US", university = "University of Wisconsin")
+
+# Custom function for two-sided vlookup
+partial_vlookup <- function(pattern, lookup_vector) {
+  out <- map_chr(pattern, \(x) {
+    out <- grep(x, lookup_vector, value = TRUE, fixed = TRUE)[1]
+    if (is.na(out)) {
+      out <- rgrep(lookup_vector, x, value = TRUE, fixed = TRUE)[1]
+    }
+    out
+    })
+  out
+}
+
+```
+
+```{r partial_vlookup, eval=query_pubmed}
+# Match universities and countries
+articles.df2 <- articles.df %>%
+  mutate(
+    university_old = university,
+    university = partial_vlookup(university, countries$university),
+    university = ifelse(is.na(university), partial_vlookup(address, countries$university), university),
+    .after = university)
+
+articles.df3 <- articles.df2 %>%
+  left_join(countries, by = "university", multiple = "first") %>% 
+  relocate(country_code, .after = year)
+
+```
+
+```{r country_code_conversion, eval=query_pubmed}
+# Get full name country, continent, and region
+articles.df4 <- articles.df3 %>% 
+  mutate(doi = paste0("https://doi.org/", doi),
+         country = countrycode(country_code, "genc2c", "country.name"),
+         region = countrycode(country_code, "genc2c", "un.regionsub.name"),
+         continent = countrycode(country_code, "genc2c", "continent"),
+         continent = case_when(continent == "Americas" ~ region,
+                               TRUE ~ continent),
+         .after = country_code) %>% 
+  mutate(date = paste(year, month, day, sep = "-"),
+         date = as_date(date)) %>% 
+  ungroup() %>% 
+  mutate()
+
+saveRDS(articles.df4, "data/articles.df4.rds")
+```
+
+# Continent
+
+## Column 1 {data-width=2150}
+
+### Waffle plot of journal paper percentages, by continent (each square = 1% of data) {data-height=600}
+
+```{r recover_existing_data, eval=!query_pubmed}
+articles.df4 <- readRDS("data/articles.df4.rds")
+```
+
+```{r get_historic_data}
+# articles_2010_2019 <- readRDS("data/articles_2010_2019.rds")
+# articles_2000_2009 <- readRDS("data/articles_2000_2009.rds")
+# articles_1990_1999 <- readRDS("data/articles_1990_1999.rds")
+# articles_1980_1989 <- readRDS("data/articles_1980_1989.rds")
+# articles_1970_1979 <- readRDS("data/articles_1970_1979.rds")
+# articles_1960_1969 <- readRDS("data/articles_1960_1969.rds")
+# articles_1950_1959 <- readRDS("data/articles_1950_1959.rds")
+# articles_1940_1949 <- readRDS("data/articles_1940_1949.rds")
+
+# articles.df4_original <- articles.df4 %>% 
+#   bind_rows(articles_2010_2019, articles_2000_2009, articles_1990_1999,
+#             articles_1980_1989, articles_1970_1979, articles_1960_1969,
+#             articles_1950_1959, articles_1940_1949) %>% 
+#   #extract_duplicates("pmid")
+#   best_duplicate("pmid")
+
+# We filter for year 1987 because there are almost no publications before that
+# And remove european journal of health of health psychology because we did not 
+# include it within the search
+# articles.df4 <- articles.df4_original %>%
+#   filter(year >= 1987,
+#          journal != "European journal of health psychology")
+
+```
+
+```{r continent_waffle_overall}
+continent.order <- c("Northern America", "Europe", "Asia", "Oceania", "Latin America and the Caribbean", "Africa")
+continent.order.short <- c("North America", "Europe", "Asia", "Oceania", "Latin America", "Africa")
+
+articles.df4 <- articles.df4 %>% 
+  mutate(continent = factor(continent, levels = continent.order),
+         journal = gsub(":.*", "", journal),
+         journal = toTitleCase(journal),
+         journal = trimws(journal))
+
+df.continent <- articles.df4 %>% 
+  mutate(missing = sum(is.na(continent))/n()) %>% 
+  filter(!is.na(continent)) %>% 
+  summarize(Papers = n(),
+            `North America` = sum(continent == "Northern America")/n(),
+            Europe = sum(continent == "Europe")/n(),
+            Asia = sum(continent == "Asia")/n(),
+            Oceania = sum(continent == "Oceania")/n(),
+            `Latin America` = sum(continent == "Latin America and the Caribbean")/n(),
+            Africa = sum(continent == "Africa")/n(),
+            Missing = first(missing),
+            ) %>% 
+  mutate(across(`North America`:Missing, ~ .x * 100)) # %>% 
+  # mutate(across(`North America`:Missing, ~ round(.x, 2))) %>% 
+  # rename_with(str_to_title) %>%
+  # rename(`Missing*` = Missing) %>% 
+  # datatable(#extensions = 'Responsive',
+  #           options = list(searching = FALSE, paging = FALSE),
+  #           caption = "Journal paper percentages, by continent")
+
+# data.waffle <- set_names(as.numeric(t(df.continent[2:7])), names(df.continent[2:7]))
+
+data.waffle <- articles.df4 %>% 
+  mutate(missing = sum(is.na(continent))/n()) %>% 
+  filter(!is.na(continent)) %>% 
+  group_by(continent) %>% 
+  add_count(name = "Papers") %>% 
+  ungroup() %>% 
+  mutate(nrow = n()) %>%
+  count(continent, nrow, sort = TRUE, name = "Papers") %>% 
+  mutate(continent = case_match(
+    continent,
+    continent.order[1] ~ continent.order.short[1],
+    continent.order[5] ~ continent.order.short[5],
+    continent ~ continent),
+    Percentage = Papers / nrow * 100) %>% 
+  select(-c(nrow, Papers)) %>% 
+  rename_with(str_to_title, .cols = 1)
+
+waffle(data.waffle, legend_pos = "right") +
+  theme(legend.text = element_text(size = 15)) #+ # rows = 5, 
+  #coord_cartesian(ylim=c(0,2))#%>% 
+  #ggplotly()
+
+```
+
+### Table of journal paper percentages, by continent {data-height=200}
+
+```{r, continent_table}
+df.continent  %>%
+  mutate(across(`North America`:Missing, ~ round(.x, 2))) %>%
+  rename_with(str_to_title) %>%
+  rename(`Missing*` = Missing) %>%
+  datatable(#extensions = 'Responsive',
+            options = list(searching = FALSE, paging = FALSE),
+            caption = "Journal paper percentages, by continent")
+```
+
+## Column 2 {.tabset .tabset-fade}
+
+### Context
+
+**Representativity of First Authors in Psychology**
+
+A large proportion of first authors in psychology are located in North America or Europe, mostly in the US ([Thalmayer et al., 2021](https://psycnet.apa.org/doi/10.1037/amp0000622), [Arnett, 2008](https://doi.org/10.1037/0003-066x.63.7.602)). In this dashboard, I present some aggregated data by continent, country, and year (for first authors only), for the topic of **PASSION**, using the following PubMed search query term:
+
+```
+passion [Title/Abstract]
+OR Dualistic Model of Passion [Text Word]
+AND ('1980/01/01'[Date - Publication] : '3000/12/31'[Date - Publication])
+```
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+### Method & Data
+
+The data from this report include information about publications on the topic of passion for years 1980 to 2023. They include information about the articles (e.g., title, abstract) as well as on the authors, such as university of affiliation. I have obtained these data from PubMed using the PubMed API through the `easyPubMed` package. I have determined the country of the first author of each paper based on the affiliation address by matching the university name with a world university names database obtained from GitHub.
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+### Missing data
+
+Some of the papers were missing address information; in many cases, the PubMed API provided only the department and no university. It was not possible to identify the country in these cases (one would need to look at the actual papers one by one to make manual corrections). Furthermore, some university names from the data did not match the university name database obtained from GitHub. In some cases, I have brought manual corrections to university names in an attempt to reduce the number of missing values.
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+### Next Steps
+
+Possible future steps include: (a) obtaining a better, more current university name database (that includes country of university), (b) making manual corrections for other research institutes not included in the university database, (c) host DT tables on a server to speed up the website and allow the inclusion of a DT table for exploring the raw data, and (d) find a way to use country flags for the countries-by-journal figure.
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+# Continent, by Year (lm)
+
+## Column 1 {data-width=800}
+
+### Scatter plot of journal paper percentages, by continent and year {data-height=600}
+
+```{r, continent_scatter_overall}
+df.continent2 <- articles.df4 %>% 
+  mutate(missing = sum(is.na(continent))/n()) %>% 
+  filter(!is.na(continent)) %>% 
+  group_by(year) %>% 
+  summarize(`North America` = sum(continent == "Northern America")/n(),
+            Europe = sum(continent == "Europe")/n(),
+            Asia = sum(continent == "Asia")/n(),
+            Oceania = sum(continent == "Oceania")/n(),
+            `Latin America` = sum(continent == "Latin America and the Caribbean")/n(),
+            Africa = sum(continent == "Africa")/n(),
+            ) %>% 
+  mutate(across(2:6, ~ .x * 100)) %>% 
+  arrange(year)
+
+df.continent3 <- df.continent2 %>%
+  pivot_longer(-year, names_to = "continent", values_to = "papers_percentage") %>%
+  mutate(year = as.numeric(year), continent = factor(continent, levels = continent.order.short),
+         papers_percentage = round(papers_percentage))
+
+colors <- suppressWarnings(RColorBrewer::brewer.pal(length(unique(df.continent3$continent)), "Set2"))
+
+nice_scatter(df.continent3,
+             predictor = "year", 
+             response = "papers_percentage", 
+             group = "continent", 
+             colours = colors,
+             method = "lm",
+             groups.order = "decreasing",
+             ytitle = "% of All Papers") %>% 
+  ggplotly(tooltip = c("x", "y"))
+
+```
+
+## Column 2
+
+### Table of journal paper percentages, by continent {data-height=200}
+
+```{r, continent_table_journal_year}
+continent.paper.missing <- articles.df4 %>% 
+  group_by(year) %>% 
+  summarize(Missing = sum(is.na(continent))/n()) %>% 
+  pull(Missing)
+
+articles.df4 %>% 
+  mutate(missing = sum(is.na(continent))/n()) %>% 
+  filter(!is.na(continent)) %>% 
+  group_by(year) %>% 
+  summarize(Papers = n(),
+            `North America` = sum(continent == "Northern America")/n(),
+            Europe = sum(continent == "Europe")/n(),
+            Asia = sum(continent == "Asia")/n(),
+            Oceania = sum(continent == "Oceania")/n(),
+            `Latin America` = sum(continent == "Latin America and the Caribbean")/n(),
+            Africa = sum(continent == "Africa")/n(),
+            `Missing*` = first(missing),
+            ) %>% 
+  mutate(`Missing*` = continent.paper.missing[-(1:8)], # 
+         across(`North America`:`Missing*`, ~ round(.x * 100, 2))) %>% 
+  arrange(desc(year)) %>% 
+  rename_with(str_to_title) %>% 
+  datatable(caption = "Journal paper percentages, by continent and year")
+
+```
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+# Continent, by Year (loess)
+
+## Column 1 {data-width=800}
+
+### Scatter plot of journal paper percentages, by continent and year {data-height=600}
+
+```{r, continent_scatter_overall_loess}
+df.continent2 <- articles.df4 %>% 
+  mutate(missing = sum(is.na(continent))/n()) %>% 
+  filter(!is.na(continent)) %>% 
+  group_by(year) %>% 
+  summarize(`North America` = sum(continent == "Northern America")/n(),
+            Europe = sum(continent == "Europe")/n(),
+            Asia = sum(continent == "Asia")/n(),
+            Oceania = sum(continent == "Oceania")/n(),
+            `Latin America` = sum(continent == "Latin America and the Caribbean")/n(),
+            Africa = sum(continent == "Africa")/n(),
+            ) %>% 
+  mutate(across(2:6, ~ .x * 100)) %>% 
+  arrange(year)
+
+df.continent3 <- df.continent2 %>%
+  pivot_longer(-year, names_to = "continent", values_to = "papers_percentage") %>%
+  mutate(year = as.numeric(year), continent = factor(continent, levels = continent.order.short),
+         papers_percentage = round(papers_percentage))
+
+colors <- suppressWarnings(RColorBrewer::brewer.pal(length(unique(df.continent3$continent)), "Set2"))
+
+nice_scatter(df.continent3,
+             predictor = "year", 
+             response = "papers_percentage", 
+             group = "continent", 
+             colours = colors,
+             method = "loess",
+             groups.order = "decreasing",
+             ytitle = "% of All Papers") %>% 
+  ggplotly(tooltip = c("x", "y"))
+
+```
+
+## Column 2
+
+### Table of journal paper percentages, by continent {data-height=200}
+
+```{r, continent_table_journal_year_loess}
+continent.paper.missing <- articles.df4 %>% 
+  group_by(year) %>% 
+  summarize(Missing = sum(is.na(continent))/n()) %>% 
+  pull(Missing)
+
+articles.df4 %>% 
+  mutate(missing = sum(is.na(continent))/n()) %>% 
+  filter(!is.na(continent)) %>% 
+  group_by(year) %>% 
+  summarize(Papers = n(),
+            `North America` = sum(continent == "Northern America")/n(),
+            Europe = sum(continent == "Europe")/n(),
+            Asia = sum(continent == "Asia")/n(),
+            Oceania = sum(continent == "Oceania")/n(),
+            `Latin America` = sum(continent == "Latin America and the Caribbean")/n(),
+            Africa = sum(continent == "Africa")/n(),
+            `Missing*` = first(missing),
+            ) %>% 
+  mutate(`Missing*` = continent.paper.missing [-(1:8)], #
+         across(`North America`:`Missing*`, ~ round(.x * 100, 2))) %>% 
+  arrange(desc(year)) %>% 
+  rename_with(str_to_title) %>% 
+  datatable(caption = "Journal paper percentages, by continent and year")
+
+```
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.
+
+# Country
+
+## Column 1 {data-width=800}
+
+### Waffle plot of journal paper percentages, by country (each flag = 1% of data)
+
+```{r country_table_overall, fig.width=4.5, fig.height=4.5}
+df.country <- articles.df4 %>% 
+  mutate(missing = sum(is.na(country_code))/n()) %>% 
+  filter(!is.na(country_code)) %>% 
+  mutate(nrow = n()) %>% 
+  count(country, country_code, nrow, sort = TRUE, name = "Papers") %>% 
+  mutate(Percentage = Papers / nrow) %>% 
+  select(-nrow) %>% 
+  add_row(country = "Missing*",
+          Papers = sum(is.na(articles.df4$country)),
+          Percentage = sum(is.na(articles.df4$country)) / nrow(articles.df4),
+          .before = 1) %>% 
+  rename_with(str_to_title)
+
+df.country3 <- articles.df4 %>% 
+  mutate(missing = sum(is.na(country))/n()) %>% 
+  filter(!is.na(country)) %>% 
+  group_by(country) %>% 
+  add_count(name = "Papers") %>% 
+  mutate(Percentage = Papers / nrow(.),
+         country = case_when(
+           Percentage < 0.02 ~ "Other",
+           TRUE ~ country)
+         ) %>%
+  ungroup() %>% 
+  mutate(nrow = n()) %>%
+  count(country, nrow, sort = TRUE, name = "Papers") %>% 
+  mutate(Percentage = Papers / nrow * 100) %>% 
+  select(-c(nrow, Papers)) %>% 
+  rename_with(str_to_title, .cols = 1)
+
+colours.country <- colorRampPalette(colors)(length(df.country3$Country))
+
+# waffle(df.country3, legend_pos = "right", colors = colours.country) +
+#   theme(legend.text = element_text(size = 15))
+
+waffle_flags <- function(in_map_var, len_x = NA, na_flag = "ac"){
+  in_map_var <- data.frame(country = in_map_var)
+  my_prop <- in_map_var %>% 
+    count(country, sort = TRUE) %>% 
+    mutate(n2 = round(n / nrow(in_map_var) * 100))
+  in_map_var <- lapply(seq_len(nrow(my_prop)), \(x) {
+    rep(my_prop$country[x], my_prop$n2[x])}) %>% 
+    unlist
+  # work out grid dimensions  
+  var_count <- length(in_map_var)
+  if(is.na(len_x)){
+    x_count <- ceiling(sqrt(var_count))
+  } else {
+    x_count <- len_x
+  }
+  y_count <- ceiling(var_count / x_count)
+  #y_count <- 10
+  grid_count <- x_count * y_count
+  df <- 
+    data.frame(x = rep(1:y_count, each = x_count),
+               y = rep(1:x_count, y_count),
+               country = c(in_map_var, rep(na_flag, grid_count - var_count))
+    )
+  country_4legend <- unique(df$country)[unique(df$country) != na_flag]
+  p <- 
+    ggplot(df, aes(x, y, country = country)) + 
+    geom_flag(size = 8.5) +
+    scale_country(breaks = country_4legend) +
+    theme_void() +
+    coord_equal() +
+    theme(legend.position = "right")
+  if(grid_count > var_count){
+    p <- 
+      p +
+      geom_point(data = df[var_count:grid_count, ], aes(x, y), colour = "white", size = 10)
+  }
+  return(p)
+}
+
+my_prop <- df.country3 %>% 
+  mutate(Country = countrycode(Country, "country.name", "genc2c"),
+         Country = tolower(Country)) %>% 
+  filter(!is.na(Country))
+in_map_var <- lapply(seq_len(nrow(my_prop)), \(x) {
+  rep(my_prop$Country[x], my_prop$Percentage[x])}) %>% 
+  unlist
+waffle_flags(in_map_var)
+
+```
+
+## Column 2
+
+### Table of journal paper percentages, by country {data-height=200}
+
+```{r country_table_journal}
+df.country %>% 
+  mutate(Percentage = round(Percentage * 100, 2)) %>% 
+  rename(`Country Code` = Country_code) %>% 
+  datatable(caption = "Journal paper percentages, by country")
+
+```
+
+> \* Percentages are calculated after excluding missing values. The *Missing* row shows the real percentage of missing values.
+
+# Country, by Year
+
+## Column 1 {data-width=1000}
+
+### Scatter plot of journal paper percentages, by country and year
+
+```{r, country_series_year}
+df.country.year.papers <- articles.df4 %>% 
+  filter(!is.na(country)) %>% 
+  count(year, name = "Papers") %>% 
+  arrange(desc(year), desc(Papers))
+
+get_year_papers <- function(year) {
+  df.country.year.papers[which(
+    df.country.year.papers$year == year), "Papers"]
+}
+
+df.country.year.missing <- articles.df4 %>% 
+  filter(is.na(country)) %>% 
+  group_by(year) %>% 
+  count(year, name = "Papers") %>% 
+  arrange(desc(year), desc(Papers)) %>% 
+  left_join(by = "year", articles.df4 %>%
+              group_by(year) %>% 
+              count(year, name = "all_papers") %>% 
+              arrange(desc(year))) %>% 
+  mutate(percentage = round(Papers / all_papers * 100, 2),
+         country = "Missing*") %>% 
+  select(-all_papers)
+
+df.country.year <- articles.df4 %>% 
+  group_by(year, country) %>% 
+  filter(!is.na(continent)) %>% 
+  count(name = "Papers") %>% 
+  mutate(percentage = round(Papers / get_year_papers(year) * 100, 2))
+
+df.country.year2 <- df.country.year %>% 
+  ungroup() %>% 
+  add_row(df.country.year.missing) %>% 
+  arrange(desc(year), desc(Papers))
+  
+getPalette = colorRampPalette(brewer.pal(8, "Set2"))
+colours.country2 <- getPalette(length(unique(df.country.year$country)))
+df.country.year %>%
+  mutate(year = as.numeric(year),
+         country = as.factor(country)) %>%
+  nice_scatter(
+             predictor = "year",
+             response = "percentage",
+             group = "country",
+             colours = colours.country2,
+             method = "lm",
+             groups.order = "decreasing",
+             ytitle = "% of All Papers") %>%
+  ggplotly(tooltip = c("x", "y"))
+
+# Include flags on scatter plot
+# Note: doesn't work with ggplotly it seems
+# library(ggflags)
+# df.country.year %>%
+#   mutate(year = as.numeric(year),
+#          country = countrycode(country, "country.name", "genc2c"),
+#          country = tolower(country),
+#          country = as.factor(country)) %>%
+#   nice_scatter(
+#              predictor = "year",
+#              response = "percentage",
+#              group = "country",
+#              colours = colors,
+#              method = "lm",
+#              groups.order = "decreasing",
+#              ytitle = "% of All Papers") + 
+#   geom_flag(aes(country = country)) +#%>%
+#   scale_country(aes(country = country)) #%>%
+  #ggplotly(tooltip = c("x", "y"))
+
+# Time series dygraph
+# q <- df.country.year %>%
+#   ungroup() %>%
+#   select(year, country, percentage) %>%
+#   mutate(year = as.Date(year, "%Y")) %>%
+#   pivot_wider(names_from = country, values_from = percentage) %>%
+#   as.xts
+# 
+# dygraph(q) %>%
+#   dyRangeSelector() %>%
+#   dyUnzoom() %>%
+#   dyCrosshair(direction = "vertical") %>% 
+#   dyOptions(strokeWidth = 3)
+
+```
+
+## Column 2
+
+### Table of journal paper percentages, by country and year {data-height=200}
+
+```{r, country_table_year}
+df.country.year2 %>% 
+  rename_with(str_to_title) %>% 
+  datatable(caption = "Journal paper percentages, by country and year")
+
+```
+
+> \* Percentages are calculated after excluding missing values. The *Missing* column shows the real percentage of missing values.

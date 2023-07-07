@@ -15,7 +15,7 @@ params:
 
 ```{r setup, include=FALSE}
 library(flexdashboard)
-query_pubmed <- FALSE
+query_pubmed <- TRUE
 ```
 
 ```{r packages}

@@ -58,7 +58,7 @@ if (nchar(API_TOKEN_PUBMED) != 36) stop("API_TOKEN_PUBMED is not 36 characters-l
 ```
 
 ```{r batch_pubmed_download, results='hide', eval=query_pubmed}
-year_low <- 1980
+year_low <- 2020
 year_high <- 3000
 
 # Download data
@@ -254,21 +254,20 @@ articles.df4 <- readRDS("data/articles.df4.rds")
 ```
 
 ```{r get_historic_data}
-# articles_2010_2019 <- readRDS("data/articles_2010_2019.rds")
-# articles_2000_2009 <- readRDS("data/articles_2000_2009.rds")
-# articles_1990_1999 <- readRDS("data/articles_1990_1999.rds")
-# articles_1980_1989 <- readRDS("data/articles_1980_1989.rds")
+articles_2010_2019 <- readRDS("data/articles_2010_2019.rds")
+articles_2000_2009 <- readRDS("data/articles_2000_2009.rds")
+articles_1990_1999 <- readRDS("data/articles_1990_1999.rds")
+articles_1980_1989 <- readRDS("data/articles_1980_1989.rds")
 # articles_1970_1979 <- readRDS("data/articles_1970_1979.rds")
 # articles_1960_1969 <- readRDS("data/articles_1960_1969.rds")
 # articles_1950_1959 <- readRDS("data/articles_1950_1959.rds")
 # articles_1940_1949 <- readRDS("data/articles_1940_1949.rds")
-# 
-# articles.df4_original <- articles.df4 %>%
-#   bind_rows(articles_2010_2019, articles_2000_2009, articles_1990_1999,
-#             articles_1980_1989, articles_1970_1979, articles_1960_1969,
-#             articles_1950_1959, articles_1940_1949) %>%
-#   #extract_duplicates("pmid")
-#   best_duplicate("pmid")
+ 
+articles.df4_original <- articles.df4 %>%
+  bind_rows(articles_2010_2019, articles_2000_2009, articles_1990_1999,
+            articles_1980_1989) %>%
+  #extract_duplicates("pmid")
+  best_duplicate("pmid")
 
 ```
 

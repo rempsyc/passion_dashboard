@@ -15,7 +15,7 @@ params:
 
 ```{r setup, include=FALSE}
 library(flexdashboard)
-query_pubmed <- TRUE
+query_pubmed <- FALSE
 ```
 
 ```{r packages}
@@ -268,6 +268,8 @@ articles.df4_original <- articles.df4 %>%
             articles_1980_1989) %>%
   #extract_duplicates("pmid")
   best_duplicate("pmid")
+
+articles.df4 <- articles.df4_original
 
 ```
 

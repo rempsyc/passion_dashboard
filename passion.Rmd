@@ -199,9 +199,9 @@ countries <- countries %>%
 # Custom function for two-sided vlookup
 partial_vlookup <- function(pattern, lookup_vector) {
   out <- map_chr(pattern, \(x) {
-    out <- grep(x, lookup_vector, value = TRUE, fixed = TRUE)[1]
+    out <- grep(x, lookup_vector, ignore.case = TRUE, value = TRUE)[1]
     if (is.na(out)) {
-      out <- rgrep(lookup_vector, x, value = TRUE, fixed = TRUE)[1]
+      out <- rgrep(lookup_vector, x, ignore.case = TRUE, value = TRUE)[1]
     }
     out
     })
@@ -226,19 +226,33 @@ articles.df3 <- articles.df2 %>%
 ```
 
 ```{r country_code_conversion, eval=query_pubmed}
+list.countries <- c(unique(countryname_dict$country.name.en), "USA", "Korea", "UK")
+get_country <- function(x, list.countries) {
+  rgrep(list.countries, x, ignore.case = TRUE, value = TRUE)[1]
+}
+
 # Get full name country, continent, and region
 articles.df4 <- articles.df3 %>% 
-  mutate(doi = paste0("https://doi.org/", doi),
-         country = countrycode(country_code, "genc2c", "country.name"),
+  rowwise() %>% 
+  mutate(country = countrycode(country_code, "genc2c", "country.name"),
+         country = ifelse(is.na(country), 
+                          get_country(address, list.countries), 
+                          country),
+         country_code = ifelse(is.na(country_code), 
+                               countrycode(country, "country.name", "genc2c"), 
+                               country_code),
          region = countrycode(country_code, "genc2c", "un.regionsub.name"),
          continent = countrycode(country_code, "genc2c", "continent"),
          continent = case_when(continent == "Americas" ~ region,
                                TRUE ~ continent),
+         doi = paste0("https://doi.org/", doi),
          .after = country_code) %>% 
   mutate(date = paste(year, month, day, sep = "-"),
          date = as_date(date)) %>% 
-  ungroup() %>% 
-  mutate()
+  ungroup()
+
+# Number of new observations
+sum(is.na(articles.df3$country_code)) - sum(is.na(articles.df4$country))
 
 saveRDS(articles.df4, "data/articles.df4.rds")
 ```
@@ -661,7 +675,7 @@ df.country.year <- articles.df4 %>%
   group_by(year, country) %>% 
   filter(!is.na(continent)) %>% 
   count(name = "Papers") %>% 
-  mutate(percentage = round(Papers / get_year_papers(year) * 100, 2))
+  mutate(percentage = as.numeric(round(Papers / get_year_papers(year) * 100, 2)))
 
 df.country.year2 <- df.country.year %>% 
   ungroup() %>% 
@@ -740,7 +754,7 @@ df.country.year2 %>%
 
 ```{r missing_universities, warning=FALSE}
 articles.df4 %>% 
-  filter(is.na(university)) %>% 
+  filter(is.na(country)) %>% 
   select(-c(country_code:region)) %>% 
   mutate(doi = paste0("<a href='", doi,"' target='_blank'>", doi, "</a>")) %>%
   datatable(

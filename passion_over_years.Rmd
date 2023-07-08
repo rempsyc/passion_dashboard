@@ -242,9 +242,27 @@ articles.df3 <- articles.df2 %>%
 
 ```{r country_code_conversion, eval=query_pubmed}
 list.countries <- c(unique(countryname_dict$country.name.en), "USA", "Korea", "UK")
-get_country <- function(x, list.countries) {
-  rgrep(list.countries, toTitleCase(tolower(x)), value = TRUE, fixed = TRUE)[1]
+cd <- get_dictionary("us_states")
+get_country <- function(address, list.countries) {
+  country <- countrycode(address, "country.name", "country.name", warn = TRUE)
+  if (is.na(country)) {
+    country <- rgrep(list.countries, address, value = TRUE, fixed = TRUE)[1]
+  }
+  if (is.na(country)) {
+    state <- rgrep(toTitleCase(tolower(cd$state.name)), 
+                   toTitleCase(tolower(address)), 
+                   value = TRUE, fixed = TRUE)[1]
+    country <- ifelse(state %in% cd$state.name, "USA", NA)
+  }
+  if (!is.na(country)) {
+    country <- countrycode(country, "country.name", "country.name", warn = TRUE)
+  }
+  country
 }
+
+x <- "Department of Defense, Uniformed Services University of the Health Sciences, Bethesda, MD 20814"
+
+get_country(x)
 
 # Get full name country, continent, and region
 articles.df4 <- articles.df3 %>% 

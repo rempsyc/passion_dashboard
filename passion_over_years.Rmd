@@ -47,9 +47,9 @@ library(tools)
 ```
 
 ```{r API_TOKEN_PUBMED, eval=query_pubmed}
-API_TOKEN_PUBMED <- keyring::key_get("pubmed", "rempsyc")
+# API_TOKEN_PUBMED <- keyring::key_get("pubmed", "rempsyc")
 # API_TOKEN_PUBMED <- Sys.getenv("API_TOKEN_PUBMED")
-# API_TOKEN_PUBMED <- params$API_TOKEN_PUBMED
+API_TOKEN_PUBMED <- params$API_TOKEN_PUBMED
 
 if (API_TOKEN_PUBMED == "") stop("API_TOKEN_PUBMED is an empty string. Terminating workflow.")
 
@@ -241,28 +241,39 @@ articles.df3 <- articles.df2 %>%
 ```
 
 ```{r country_code_conversion, eval=query_pubmed}
-list.countries <- c(unique(countryname_dict$country.name.en), "USA", "Korea", "UK")
+list.countries <- c(unique(countryname_dict$country.name.en), "USA", "Korea", "UK", "Scotland")
 cd <- get_dictionary("us_states")
 get_country <- function(address, list.countries) {
   country <- countrycode(address, "country.name", "country.name", warn = TRUE)
   if (is.na(country)) {
-    country <- rgrep(list.countries, address, value = TRUE, fixed = TRUE)[1]
-  }
-  if (is.na(country)) {
-    state <- rgrep(toTitleCase(tolower(cd$state.name)), 
-                   toTitleCase(tolower(address)), 
-                   value = TRUE, fixed = TRUE)[1]
-    country <- ifelse(state %in% cd$state.name, "USA", NA)
-  }
-  if (!is.na(country)) {
-    country <- countrycode(country, "country.name", "country.name", warn = TRUE)
-  }
+    country <- rgrep(toTitleCase(tolower(list.countries)), 
+                     toTitleCase(tolower(address)), 
+                     value = TRUE, fixed = TRUE)[1]
+    country <- case_match(country,
+                          "Scotland" ~ "UK",
+                          .default = country)
+    if (is.na(country)) {
+      state <- rgrep(toTitleCase(tolower(cd$state.name)), 
+                     toTitleCase(tolower(address)), 
+                     value = TRUE, fixed = TRUE)[1]
+      country <- ifelse(state %in% cd$state.name, "USA", NA)
+      if (is.na(country)) {
+        state <- rgrep(cd$state.abb,  address, value = TRUE, fixed = TRUE)[1]
+        country <- ifelse(state %in% cd$state.abb, "USA", NA)
+      }
+      }
+    if (!is.na(country)) {
+      country <- countrycode(country, "country.name", "country.name", warn = TRUE)
+    }
+    }
   country
 }
 
-x <- "Department of Defense, Uniformed Services University of the Health Sciences, Bethesda, MD 20814"
-
-get_country(x)
+# x <- "Scotland"
+# x <- "Department of Defense, USA, asdfa"
+# x <- "Department of Defense, Uniformed Services University of the Health Sciences, Bethesda, NY, 20814"
+# x <- "Department of Defense, Uniformed Services University of the Health Sciences, Bethesda, ny, 20814"
+# get_country(x, list.countries)
 
 # Get full name country, continent, and region
 articles.df4 <- articles.df3 %>% 

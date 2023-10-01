@@ -12,7 +12,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-query_pubmed <- FALSE
+query_pubmed <- TRUE
 ```
 
 ```{r packages}
